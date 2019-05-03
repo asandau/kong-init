@@ -254,7 +254,6 @@ fn verify_kong_version(context: &mut ExecutionContext) -> bool {
                 context.support_api = true;
             } else {
                 // kong ser over 0.13.X
-                context.support_api = true;
                 context.support_service_route = true;
             }
             true
@@ -456,8 +455,6 @@ fn init_routes(context: &mut ExecutionContext, routes: Vec<RouteInfo>) {
 }
 
 fn apply_plugins_to_service_route(context: &ExecutionContext, plugins: &[PluginInfo]) {
-    //let service_re = Regex::new(r"^s\[[-0-9a-zA-Z,]+]$").unwrap();
-    //let route_re = Regex::new(r"^r\[[-0-9a-zA-Z,]+]$").unwrap();
 
     for plugin_info in plugins {
         debug!("pluinInfo {:?}", plugin_info);
@@ -480,13 +477,9 @@ fn apply_plugins_to_service_route(context: &ExecutionContext, plugins: &[PluginI
             let mut t = target.trim_start_matches("r[").to_string();
             let tm = t.len();
             t.truncate(tm - 1);
-            info!("route id mapping: {:?}", context.route_name_id_mapping);
             let tmp = Vec::from_iter(t.split(',').map(|s| s.trim_end().trim_start()).map(String::from))
                 .iter()
-                .map(|r_name| {
-                    info!("target: {:?}", r_name);
-                    return context.route_name_id_mapping[r_name].clone();
-                })
+                .map(|r_name| context.route_name_id_mapping[r_name].clone())
                 .collect();
             debug!("plugin {} with route target {:?}", plugin_info.name, tmp);
             PluginTarget::Routes(tmp)

@@ -118,7 +118,6 @@ impl<'t> KongApiClient<'t> {
 
         let encoded_path = payload.remove("url").unwrap().as_str().unwrap().replace("+", "%2d");
         payload.insert("url".to_string(), serde_json::Value::String(encoded_path));
-        info!("Info Payload: {:?}", payload);
 
         match self
             .client
@@ -373,36 +372,6 @@ impl<'t> KongApiClient<'t> {
 
     pub fn add_consumer(&self, payload: &BTreeMap<String, Value>) {
         let username = payload.get("username").unwrap();
-        info!("consumer payload. {:?}", payload);
-        match self
-            .client
-            .post(&format!("{}/consumers", self.base_url))
-            .json(&payload)
-            .send()
-        {
-            Err(why) => {
-                error!("upsert_consumer: {}", why);
-            }
-            Ok(resp) => {
-                if resp.status() == StatusCode::CREATED {
-                    info!("upsert_consumer: username={} has CREATED!", username);
-                } else if resp.status() == StatusCode::CONFLICT {
-                    info!("upsert_consumer: username={} has existed! skip..", username);
-                } else {
-                    error!(
-                        "upsert_consumer: unexpected status returned {}",
-                        resp.status()
-                    );
-                }
-            }
-        }
-    }
-
-    //TODO add credential for consumer
-
-    pub fn add_credential(&self, payload: &BTreeMap<String, Value>) {
-        let username = payload.get("username").unwrap();
-        info!("consumer payload. {:?}", payload);
         match self
             .client
             .post(&format!("{}/consumers", self.base_url))
@@ -554,9 +523,6 @@ impl<'t> KongApiClient<'t> {
         let mut json_payload = HashMap::new();
         json_payload.insert("name".to_string(), Value::String(plugin_conf.name.clone()));
         json_payload.insert("enabled".to_string(), Value::Bool(plugin_conf.enabled));
-        // for (k, v) in plugin_conf.config.iter() {
-        //     json_payload.insert(format!("config.{}", k), Value::String(v.to_string()));
-        // }
         if plugin_conf.config.len() != 0 {
             json_payload.insert("config".to_string(), json!(plugin_conf.config));
         }
@@ -586,7 +552,6 @@ impl<'t> KongApiClient<'t> {
     }
 
     pub fn _apply_plugin(&self, target_desc: &str, payload: &HashMap<String, Value>) {
-        info!("plugin payload {:?}", payload);
         match self
             .client
             .post(&format!("{}/plugins", self.base_url))
