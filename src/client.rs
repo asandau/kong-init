@@ -112,13 +112,18 @@ impl<'t> KongApiClient<'t> {
         }
     }
 
-    pub fn add_service(&self, payload: &ServiceInfo) -> Option<String> {
-        let s_name = payload.get("name").unwrap();
+    pub fn add_service(&self, mut payload: ServiceInfo) -> Option<String> {
+        let owned_payload = payload.to_owned();
+        let s_name = owned_payload.get("name").unwrap();
+
+        let encoded_path = payload.remove("url").unwrap().as_str().unwrap().replace("+", "%2d");
+        payload.insert("url".to_string(), serde_json::Value::String(encoded_path));
+        info!("Info Payload: {:?}", payload);
 
         match self
             .client
             .post(&format!("{}/services", self.base_url))
-            .json(payload)
+            .json(&payload)
             .send()
         {
             Err(why) => {
@@ -251,6 +256,9 @@ impl<'t> KongApiClient<'t> {
         let mut silly_obj_map = SerdeMap::new();
         silly_obj_map.insert("id".to_string(), Value::String(service_id));
         route_cfg.insert("service".to_string(), Value::Object(silly_obj_map));
+        if !route_cfg.contains_key("name") {
+            route_cfg.insert("name".to_string(), serde_json::Value::String(route_info.name.to_string()));
+        }
 
         match self
             .client
@@ -363,8 +371,38 @@ impl<'t> KongApiClient<'t> {
         }
     }
 
-    pub fn add_consumer(&self, payload: &BTreeMap<String, String>) {
+    pub fn add_consumer(&self, payload: &BTreeMap<String, Value>) {
         let username = payload.get("username").unwrap();
+        info!("consumer payload. {:?}", payload);
+        match self
+            .client
+            .post(&format!("{}/consumers", self.base_url))
+            .json(&payload)
+            .send()
+        {
+            Err(why) => {
+                error!("upsert_consumer: {}", why);
+            }
+            Ok(resp) => {
+                if resp.status() == StatusCode::CREATED {
+                    info!("upsert_consumer: username={} has CREATED!", username);
+                } else if resp.status() == StatusCode::CONFLICT {
+                    info!("upsert_consumer: username={} has existed! skip..", username);
+                } else {
+                    error!(
+                        "upsert_consumer: unexpected status returned {}",
+                        resp.status()
+                    );
+                }
+            }
+        }
+    }
+
+    //TODO add credential for consumer
+
+    pub fn add_credential(&self, payload: &BTreeMap<String, Value>) {
+        let username = payload.get("username").unwrap();
+        info!("consumer payload. {:?}", payload);
         match self
             .client
             .post(&format!("{}/consumers", self.base_url))
@@ -516,8 +554,11 @@ impl<'t> KongApiClient<'t> {
         let mut json_payload = HashMap::new();
         json_payload.insert("name".to_string(), Value::String(plugin_conf.name.clone()));
         json_payload.insert("enabled".to_string(), Value::Bool(plugin_conf.enabled));
-        for (k, v) in plugin_conf.config.iter() {
-            json_payload.insert(format!("config.{}", k), Value::String(v.to_string()));
+        // for (k, v) in plugin_conf.config.iter() {
+        //     json_payload.insert(format!("config.{}", k), Value::String(v.to_string()));
+        // }
+        if plugin_conf.config.len() != 0 {
+            json_payload.insert("config".to_string(), json!(plugin_conf.config));
         }
 
         match target {
@@ -535,7 +576,9 @@ impl<'t> KongApiClient<'t> {
             PluginTarget::Routes(routes) => {
                 routes.iter().for_each(|r_id| {
                     let msg = &format!("applying plugin {} to route {}", plugin_conf.name, r_id);
-                    json_payload.insert("route_id".to_string(), Value::String(r_id.clone()));
+                    let mut route = HashMap::new();
+                    route.insert("id".to_string(), Value::String(r_id.clone()));
+                    json_payload.insert("route".to_string(), json!(route));
                     self._apply_plugin(msg, &json_payload);
                 });
             }
@@ -543,6 +586,7 @@ impl<'t> KongApiClient<'t> {
     }
 
     pub fn _apply_plugin(&self, target_desc: &str, payload: &HashMap<String, Value>) {
+        info!("plugin payload {:?}", payload);
         match self
             .client
             .post(&format!("{}/plugins", self.base_url))

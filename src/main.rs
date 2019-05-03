@@ -75,6 +75,12 @@ fn main() {
                 .long("wait")
                 .short("w")
                 .help("wait until kong-server is ready(suit for init under cloud environment)"),
+        ).arg(
+            Arg::with_name("clear")
+                .required(false)
+                .long("clear")
+                .short("c")
+                .help("if database should be cleared before populating")
         ).get_matches();
 
     let tmpl_path = matches.value_of("path").unwrap();
@@ -87,7 +93,9 @@ fn main() {
 
     let is_wait = matches.is_present("wait");
 
-    if let Err(_e) = runc(tmpl_path, admin_url, custom_headers_opt, is_wait) {
+    let is_clear = matches.is_present("clear");
+
+    if let Err(_e) = runc(tmpl_path, admin_url, custom_headers_opt, is_wait, is_clear) {
         //        error!("unable to init kong: {}", _e);
         std::process::exit(1)
     }
@@ -126,6 +134,7 @@ fn runc(
     admin_url: &str,
     custom_headers_opt: Option<Vec<&str>>,
     is_wait: bool,
+    is_clear: bool,
 ) -> Result<(), Error> {
     let mut context = ExecutionContext::new(admin_url, custom_headers_opt);
 
@@ -148,7 +157,9 @@ fn runc(
 
     match deserialized_conf {
         ConfFileStyle::Legacy(legacy_conf) => {
-            clear_before_init_legacy(&context);
+            if is_clear {
+                clear_before_init_legacy(&context);
+            }
 
             if let Some(consumers) = &legacy_conf.consumers {
                 init_consumers(&context, consumers);
@@ -166,7 +177,9 @@ fn runc(
             }
         }
         ConfFileStyle::Suggested(suggested_conf) => {
-            clear_before_init(&context);
+            if is_clear {
+                clear_before_init(&context);
+            }
 
             if let Some(consumers) = &suggested_conf.consumers {
                 init_consumers(&context, consumers);
@@ -176,8 +189,13 @@ fn runc(
                 init_credentials(&context, credentials);
             }
 
-            init_services(&mut context, &suggested_conf.services);
-            init_routes(&mut context, suggested_conf.routes);
+            if let Some(services) = suggested_conf.services {
+                init_services(&mut context, services);
+            }
+
+            if let Some(routes) = suggested_conf.routes {
+                init_routes(&mut context, routes);
+            }
 
             if let Some(plugins) = &suggested_conf.plugins {
                 apply_plugins_to_service_route(&context, plugins);
@@ -234,14 +252,10 @@ fn verify_kong_version(context: &mut ExecutionContext) -> bool {
             if Version::parse(mapped_semver_ce_ver) < Version::parse("0.13.0") {
                 // kong under 0.13.X do not support service/route
                 context.support_api = true;
-            } else if Version::parse(mapped_semver_ce_ver) < Version::parse("0.15.0") {
-                // kong within 0.13.X and 0.14.X
+            } else {
+                // kong ser over 0.13.X
                 context.support_api = true;
                 context.support_service_route = true;
-            } else {
-                // version >= 0.15.X, currently not supported.
-                error!("kong version {}, currently not supported.", &kong_ver);
-                std::process::exit(1);
             }
             true
         }
@@ -336,7 +350,7 @@ fn _replace_env(input: &str) -> String {
 fn init_consumers(context: &ExecutionContext, consumers: &[ConsumerInfo]) {
     for consumer_info in consumers {
         debug!("consumer_info {:?}", consumer_info);
-        context.kong_cli.add_consumer(&consumer_info);
+        context.kong_cli.add_consumer(consumer_info);
     }
     info!("finished loading Consumers...");
     info!("=================================");
@@ -406,12 +420,13 @@ fn clear_before_init(context: &ExecutionContext) {
     context.kong_cli.delete_all_services();
 }
 
-fn init_services(context: &mut ExecutionContext, services: &[ServiceInfo]) {
+fn init_services(context: &mut ExecutionContext, services: Vec<ServiceInfo>) {
     for service_info in services {
-        let serde_value_field = service_info.get("name").unwrap();
+        let owned_service_info = service_info.to_owned();
+        let serde_value_field = owned_service_info.get("name").unwrap();
         match serde_value_field {
             Value::String(service_name) => {
-                let sid = context.kong_cli.add_service(&service_info).unwrap();
+                let sid = context.kong_cli.add_service(service_info).unwrap();
                 context
                     .service_name_id_mapping
                     .insert(service_name.to_string(), sid);
@@ -441,8 +456,8 @@ fn init_routes(context: &mut ExecutionContext, routes: Vec<RouteInfo>) {
 }
 
 fn apply_plugins_to_service_route(context: &ExecutionContext, plugins: &[PluginInfo]) {
-    let service_re = Regex::new(r"^s\[[-0-9a-zA-Z,]+]$").unwrap();
-    let route_re = Regex::new(r"^r\[[-0-9a-zA-Z,]+]$").unwrap();
+    //let service_re = Regex::new(r"^s\[[-0-9a-zA-Z,]+]$").unwrap();
+    //let route_re = Regex::new(r"^r\[[-0-9a-zA-Z,]+]$").unwrap();
 
     for plugin_info in plugins {
         debug!("pluinInfo {:?}", plugin_info);
@@ -451,23 +466,27 @@ fn apply_plugins_to_service_route(context: &ExecutionContext, plugins: &[PluginI
 
         let plugin_target = if target == "global" {
             PluginTarget::GLOBAL
-        } else if service_re.is_match(target) {
-            let mut t = target.trim_left_matches("s[").to_string();
+        } else if target.starts_with("s[") {
+            let mut t = target.trim_start_matches("s[").to_string();
             let tm = t.len();
             t.truncate(tm - 1);
-            let tmp = Vec::from_iter(t.split(',').map(String::from))
+            let tmp = Vec::from_iter(t.split(',').map(|s| s.trim_end().trim_start()).map(String::from))
                 .iter()
                 .map(|s_name| context.service_name_id_mapping[s_name].clone())
                 .collect();
             debug!("plugin {} with service target {:?}", plugin_info.name, tmp);
             PluginTarget::SERVICES(tmp)
-        } else if route_re.is_match(target) {
-            let mut t = target.trim_left_matches("r[").to_string();
+        } else if target.starts_with("r[") {
+            let mut t = target.trim_start_matches("r[").to_string();
             let tm = t.len();
             t.truncate(tm - 1);
-            let tmp = Vec::from_iter(t.split(',').map(String::from))
+            info!("route id mapping: {:?}", context.route_name_id_mapping);
+            let tmp = Vec::from_iter(t.split(',').map(|s| s.trim_end().trim_start()).map(String::from))
                 .iter()
-                .map(|r_name| context.route_name_id_mapping[r_name].clone())
+                .map(|r_name| {
+                    info!("target: {:?}", r_name);
+                    return context.route_name_id_mapping[r_name].clone();
+                })
                 .collect();
             debug!("plugin {} with route target {:?}", plugin_info.name, tmp);
             PluginTarget::Routes(tmp)
