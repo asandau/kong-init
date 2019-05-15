@@ -17,5 +17,3 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get -q update && apt-get -yq install \
 	&& rm -rf /var/lib/apt/lists/*
 
 COPY --from=base /usr/src/kong-init/target/release/kong-init /usr/bin/kong-init
-
-CMD /usr/bin/kong-init

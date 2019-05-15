@@ -112,12 +112,8 @@ impl<'t> KongApiClient<'t> {
         }
     }
 
-    pub fn add_service(&self, mut payload: ServiceInfo) -> Option<String> {
-        let owned_payload = payload.to_owned();
-        let s_name = owned_payload.get("name").unwrap();
-
-        let encoded_path = payload.remove("url").unwrap().as_str().unwrap().replace("+", "%2d");
-        payload.insert("url".to_string(), serde_json::Value::String(encoded_path));
+    pub fn add_service(&self, payload: ServiceInfo) -> Option<String> {
+        let s_name = payload.get("name").unwrap();
 
         match self
             .client
